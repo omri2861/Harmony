@@ -2,8 +2,8 @@ import socket
 import login
 import sys
 from PyQt4 import QtGui
-from PyQt4.QtCore import *
 import threading
+import main_window
 
 sys.path.insert(0, r'F:\Python\HARMONY\src\server')
 import management
@@ -66,7 +66,7 @@ def server_connection_error_msg():
     """
     text = "Cannot connect to the server."
     informative = ("HARMONY program is constantly trying to connect to the server, so you got nothing to worry"
-                   " about. If this doesn't work after a few times, please try again later or"
+                   " about. If this doesn't work after a few times, please try again later or "
                    "contact the server administrator.")
 
     msg = dialog(text, informative)
@@ -122,6 +122,11 @@ class ThreadedClient(object):
         self.login_window.set_login(self.request_login)
         self.login_window.set_signup(feature_not_available)
 
+        self.main_frame = main_window.MainWindow()
+        self.main_frame.logout_button.clicked.connect(self.onLogout)
+        self.main_frame.delete_button.clicked.connect(feature_not_available)
+        self.main_frame.upload_button.clicked.connect(feature_not_available)
+
         self.threads = {
             'login': threading.Thread(target=self.login),
             'establish_connection': threading.Thread(target=self.establish_connection)
@@ -151,6 +156,9 @@ class ThreadedClient(object):
             if self.signals['logged-in']:
                 self.username = self.login_window.get_username()
                 self.password = self.login_window.get_password()
+                self.login_window.setShown(False)
+                self.main_frame.set_label_text("Hello, "+self.username)
+                self.main_frame.show()
             elif self.signals['correct-username']:
                 msg = dialog("Incorrect Password", '')
                 msg.exec_()
@@ -174,6 +182,7 @@ class ThreadedClient(object):
         trying to initialize a connection.
         :return: None
         """
+        self.signals['connected'] = False
         while not self.signals['connected']:
             try:
                 self.sock.connect(SERVER_ADDRESS)
@@ -210,6 +219,30 @@ class ThreadedClient(object):
 
                 self.signals['login_requested'] = False
 
+    def logout(self):
+        """
+        Send a logout message to the server.
+        :return: None
+        """
+        logout_msg = management.Message(management.LOGOUT, self.username, self.password)
+        self.sock.send(str(logout_msg))
+        self.sock.close()  # When the server receives a logout message, it automatically closes the connection.
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        threading.Thread(target=self.establish_connection).start()
+        self.signals['correct-username'] = False
+        self.signals['correct-password'] = False
+        self.signals['logged-in'] = False
+        self.main_frame.setShown(False)
+        self.login_window.show()
+
+    def onLogout(self):
+        """
+        Unlike the logout method, which performs a logout from the server, this method should be called when
+        the 'logout' button is pressed.
+        :return: None
+        """
+        threading.Thread(target=self.logout).start()
+
     def exit_and_logout(self, exit_code):
         """
         Will kill all the running threads, send exit message, etc...
@@ -217,9 +250,10 @@ class ThreadedClient(object):
         :parameter exit_code: The exit code given.
         :returns: exit_code
         """
-        logout_msg = management.Message(management.LOGOUT, self.username, self.password)
-        self.sock.send(str(logout_msg))
-        self.sock.close()
+        if self.signals['logged-in']:
+            self.logout()
+        elif self.signals['connected']:
+            self.sock.close()
         return exit_code
 
 

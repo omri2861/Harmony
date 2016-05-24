@@ -1,5 +1,6 @@
 import os
 import re
+import wave
 
 """
 This module contains objects that helps the server manage it's users, songs and other data.
@@ -163,7 +164,7 @@ class Message(object):
     sent and analyzed by the other side.
     You might notice that this protocol resembles HTTP, but this is not by mistake.
     """
-    def __init__(self, request_type, username, password, data="", flags=0b11111111):
+    def __init__(self, request_type, username, password, data=None, flags=0b11111111):
         """
         Receives the field of the message and creates the message object.
         :param request_type: A string chosen from the options of the HDTP.
@@ -181,25 +182,31 @@ class Message(object):
         self._data = None
         self.set_data(data)
 
-    def set_data(self, data):
+    def set_data(self, data_dict):
         """
-        The data of the message is a private property, and is not just a simple dictionary, but a modified one to match
-        the HDTP protocol. Therefore, in order to change the data, the programmer must use this method.
-        :param data: The new data dictionary.
+        The data_dict of the message is a private property, and is not just a simple dictionary, but a modified one to match
+        the HDTP protocol. Therefore, in order to change the data_dict, the programmer must use this method.
+        :param data_dict: The new data dictionary.
         :return: None
         """
-        self._data = data
-        self._data.encode('base64')
+        if data_dict is None:
+            self._data = ""
+            return
+        elif type(data_dict) is not dict:
+            self._data = ""
+            return
+        self._data = '&'.join(['%s=%s' % (key, data_dict[key].encode('base64')) for key in data_dict.keys()])
 
     def get_data(self):
         """
         As the data is modified to match the HDTP protocol, in order to access it, this method should be called to
-        return an accessible copy of the data.
+        return an accessible copy of the data as a dictionary.
         :return: A dictionary of the message's data.
         """
-        self._data.decode('base64')
-        result = self._data
-        self._data.encode('base64')
+        result = {}
+        for attr in self._data.split('&'):
+            key, value = attr.split('=')[0], attr.split('=')[1]
+            result[key] = value
         return result
 
     def get_size(self):
@@ -230,7 +237,17 @@ class ReceivedMessage(Message):
         else:
             username = None
             password = None
-            data = ""
             request = None
+            data = {}
             flags = 0b11111111
-        super(ReceivedMessage, self).__init__(request, username, password, data, flags)
+        super(ReceivedMessage, self).__init__(request, username, password, flags=flags)
+        self._data = data  # this is because when taken from a raw message, there is no need to format a data dictionary
+        #  to  str again
+
+
+class Song(object):
+    """
+
+    """
+    pass
+
