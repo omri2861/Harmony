@@ -1,19 +1,24 @@
 import os
 import re
 import wave
+from pydub import AudioSegment as audioseg
+import eyed3
+import pickle
+import copy
+import threading
 
 """
 This module contains objects that helps the server manage it's users, songs and other data.
 """
 VERSION = 1.1
 
+LINE_BREAK = "\r\n"
 USERNAME_LEN_RANGE = 8, 12
 PASSWORD_LEN_RANGE = 8, 14
-USER_STR_FORMAT = "USERNAME: %s\nPASSWORD: %s\n[\n%s\n]\r\n"
+USER_STR_FORMAT = "USERNAME: %s\nPASSWORD: %s" + LINE_BREAK
 DATABASE_USERNAME_PATTERN = "USERNAME: (.{%d,%d})\n" % USERNAME_LEN_RANGE
-DATABASE_PASSWORD_PATTERN = "PASSWORD: (.{%d,%d})\n" % PASSWORD_LEN_RANGE
+DATABASE_PASSWORD_PATTERN = "PASSWORD: (.{%d,%d})" % PASSWORD_LEN_RANGE
 DATABASE_PATH = os.curdir + os.sep + 'users' + os.sep + "database.txt"
-LINE_BREAK = "\r\n"
 HDTP_PATTERN = (
     "HARMONY " + str(VERSION) + LINE_BREAK +
     "(.{1,10})" + LINE_BREAK +
@@ -30,16 +35,19 @@ HDTP_FORMAT = (
     "PASSWORD: %s" + LINE_BREAK +
     "FLAGS: %d" + LINE_BREAK +
     "SIZE: %d" + LINE_BREAK +
-    "DATA:" + LINE_BREAK + "%s" + LINE_BREAK
+    "DATA:" + LINE_BREAK + "%s"
 )
 HDTP_FLAGS = {
     "authorized": 0b00000010,
     "successfull": 0b00000001
 }
-LOGIN = "LOGIN"
-LOGOUT = "LOGOUT"
+HDTP_COMMANDS = {
+    'login': 'LOGIN',
+    'logout': 'LOGOUT',
+    'tags': 'TAGS'
+}
 HDTP_SIZE_PATTERN = "SIZE: ([0-9]*)"
-HDTP_DATA_PATTERN = "DATA:" + LINE_BREAK + "(.*)" + LINE_BREAK
+HDTP_DATA_PATTERN = "DATA:" + LINE_BREAK + "(.*)"
 
 
 class User(object):
@@ -69,7 +77,8 @@ class User(object):
         if not os.path.isdir(self.dir):
             os.mkdir(self.dir)
 
-        self.songs = []  # Still needs to be changed
+        songs_paths = [os.path.join(self.dir, song_path) for song_path in os.listdir(self.dir) if song_path.endswith('.mp3')]
+        self.songs = [Song(song_path) for song_path in songs_paths]
         
     def get_username(self):
         """
@@ -112,7 +121,16 @@ class User(object):
             return False
 
     def __str__(self):
-        return USER_STR_FORMAT % (self._username, self._password, '\n'.join(self.songs))
+        return USER_STR_FORMAT % (self._username, self._password)
+
+    def get_songs_properties(self):
+        """
+        :return: A pickled string of a of a list containing the user's songs properties.
+        """
+        songs_properties = []
+        for song in self.songs:
+            songs_properties.append(song.properties)
+        return pickle.dumps(songs_properties)
 
 
 class NewUser(User):
@@ -121,7 +139,7 @@ class NewUser(User):
     could be initialized with given parameters.
     """
     def __init__(self, username, password):
-        super(NewUser, self).__init__(USER_STR_FORMAT % (username, password, ""))
+        super(NewUser, self).__init__(USER_STR_FORMAT % (username, password))
 
 
 class Manager(object):
@@ -189,10 +207,7 @@ class Message(object):
         :param data_dict: The new data dictionary.
         :return: None
         """
-        if data_dict is None:
-            self._data = ""
-            return
-        elif type(data_dict) is not dict:
+        if data_dict is None or type(data_dict) is not dict:
             self._data = ""
             return
         self._data = '&'.join(['%s=%s' % (key, data_dict[key].encode('base64')) for key in data_dict.keys()])
@@ -205,8 +220,8 @@ class Message(object):
         """
         result = {}
         for attr in self._data.split('&'):
-            key, value = attr.split('=')[0], attr.split('=')[1]
-            result[key] = value
+            key, value = attr.split('=', 1)[0], attr.split('=', 1)[1]
+            result[key] = value.decode('base64').rstrip()
         return result
 
     def get_size(self):
@@ -231,8 +246,9 @@ class ReceivedMessage(Message):
         """
         :param raw_msg: The message received from the socket.
         """
-        if re.findall(re.compile(HDTP_PATTERN+LINE_BREAK), raw_msg):
-            request, username, password, flags, size, data = re.findall(re.compile(HDTP_PATTERN+LINE_BREAK), raw_msg)[0]
+        if re.findall(re.compile(HDTP_PATTERN), raw_msg):
+            request, username, password, flags, size, data = re.findall(re.compile(HDTP_PATTERN), raw_msg)[0]
+            data = re.findall(re.compile(HDTP_DATA_PATTERN, re.DOTALL), raw_msg)[0]
             flags = int(flags)
         else:
             username = None
@@ -247,7 +263,61 @@ class ReceivedMessage(Message):
 
 class Song(object):
     """
-
+    This class is meant to help harmony to manage it's songs.
     """
-    pass
+    def __init__(self, filename):
+        """
+        :param filename: A valid mp3 file stored on the server.
+        """
+        if os.path.isfile(filename) and filename.endswith('mp3'):
+            self.mp3_path = filename
+            self.wav_path = filename.replace('.mp3', '.wav')
 
+            properties_analyzer = eyed3.load(self.mp3_path)
+            self.properties = {
+                'artist': copy.copy(properties_analyzer.tag.artist),
+                'title': copy.copy(properties_analyzer.tag.title),
+                'album': copy.copy(properties_analyzer.tag.album),
+                'time_secs': properties_analyzer.info.time_secs
+            }
+
+            properties_analyzer.tag.save()
+
+            if self.properties['title'] is None:
+                self.properties['title'] = self.mp3_path[self.mp3_path.rindex(os.sep):self.mp3_path.rindex('.')]
+
+            for field in self.properties.keys():
+                if self.properties[field] is None:
+                    self.properties[field] = "Unknown"
+                elif type(self.properties[field]) is unicode:
+                    self.properties[field] = str(self.properties[field])
+
+            if not os.path.isfile(self.wav_path):
+                threading.Thread(target=self.convert_to_wav).start()
+
+            self.info = {}
+        else:
+            raise ValueError("HARMONY only supports existing mp3 files.\nFile Given:\n%s\n" % filename)
+
+    def load_data(self):
+        """
+        This method will load the wave dile data to the class in order to stream. It will not be loaded with the
+        init method due to efficiency.
+        :return: None
+        """
+        info_analyzer = wave.Wave_read(self.wav_path)
+        self.info = {
+            'frames': info_analyzer.getnframes(),
+            'channels': info_analyzer.getnchannels(),
+            'frame_rate': info_analyzer.getframerate(),
+            'width': info_analyzer.getsampwidth()
+        }
+
+        info_analyzer.close()
+
+    def convert_to_wav(self):
+        """
+        This method will convert the mp3 song file to wav, so the server could handle it's data.
+        :return: None
+        """
+        audioseg.from_mp3(self.mp3_path).export(self.wav_path, 'wav')

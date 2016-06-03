@@ -25,8 +25,6 @@ SELF_IP = get_self_ip()
 SELF_ADDRESS = SELF_IP, SELF_PORT
 SERVER_SOCK_TIMEOUT = 5
 BAND_WIDTH = 1024
-HDTP_USERNAME_PATTERN = "USERNAME: (.{8,12})\r\n"
-HDTP_PASSWORD_PATTERN = "PASSWORD: (.{8,14})\r\n"
 
 
 def accept_login(sock, msg, manager, waiting_messages):
@@ -40,20 +38,25 @@ def accept_login(sock, msg, manager, waiting_messages):
     :param waiting_messages: A list of the waiting messages and their sockets.
     :return: A management.User object if the user could be logged in, None otherwise.
     """
-    if msg.request != management.LOGIN:
+    if msg.request != management.HDTP_COMMANDS['login']:
         return None
     user = manager.get_user_by_name(msg.username)
     if user is not None:
         if user.is_authorized(msg.password):
-            return_msg = management.Message(management.LOGIN, msg.username, msg.password, str(user))
+            return_msg = management.Message(management.HDTP_COMMANDS['login'], msg.username, msg.password, str(user))
         else:
-            return_msg = management.Message(management.LOGIN, msg.username, msg.username)
+            return_msg = management.Message(management.HDTP_COMMANDS['login'], msg.username, msg.username)
             return_msg.flags ^= management.HDTP_FLAGS['authorized']
     else:
-        return_msg = management.Message(management.LOGIN, msg.username, msg.username)
+        return_msg = management.Message(management.HDTP_COMMANDS['login'], msg.username, msg.username)
         return_msg.flags ^= management.HDTP_FLAGS['successfull']
     waiting_messages.append((sock, str(return_msg)))
     if user is not None and user.is_authorized(msg.password):
+        data_msg = management.Message(management.HDTP_COMMANDS['tags'], msg.username, msg.password,
+                                      {'data': user.get_songs_properties()})
+        waiting_messages.append((sock, str(data_msg)))
+        print data_msg
+        print len(msg._data)
         return user
 
 
@@ -73,7 +76,7 @@ def receive_and_handle_msg(client, online_clients, manager, waiting_messages):
         return
     msg = receive_full_message(raw_msg, sock)
 
-    if msg.request == management.LOGIN:
+    if msg.request == management.HDTP_COMMANDS['login']:
         new_user = accept_login(sock, msg, manager, waiting_messages)
         try:
             online_clients.remove((None, sock))
@@ -82,7 +85,7 @@ def receive_and_handle_msg(client, online_clients, manager, waiting_messages):
             pass  # This user is connected on another device so there is no need to delete a temporary version of him,
         # just add a new one.
         online_clients.append((new_user, sock))
-    elif msg.request == management.LOGOUT and user.is_authorized(msg.password):
+    elif msg.request == management.HDTP_COMMANDS['login'] and user.is_authorized(msg.password):
         sock.close()
         online_clients.remove(client)
 
@@ -109,7 +112,7 @@ def receive_full_message(msg, sock):
     """
     result = msg
     bytes_to_read = int(re.findall(re.compile(management.HDTP_SIZE_PATTERN), msg)[0])
-    bytes_to_read -= len(re.findall(re.compile("DATA:\r\n(.*)"), msg)[0])
+    bytes_to_read -= len(re.findall(re.compile("DATA:\r\n(.*)", re.DOTALL), msg)[0])
     while bytes_to_read > BAND_WIDTH:
         piece = sock.recv(BAND_WIDTH)
         result += piece

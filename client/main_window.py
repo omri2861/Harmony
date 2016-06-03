@@ -22,13 +22,41 @@ LABEL_TEXT_FORMAT = "<html><head/><body><p><span style=\" font-size:36pt; font-w
 LABEL_SHADOW_TEXT_FORMAT = "<html><head/><body><p><span style=\" font-size:36pt; font-weight:600; " \
                     "color:#adadad;\">%s</span></p></body></html>"
 
+TABLE_COLUMN_INDEX = {
+    'title': 0,
+    'artist': 1,
+    'album': 2,
+    'length': 3
+
+}
+
+
+def presentable_time(seconds):
+    """
+    Converts the amount of seconds to the format: "mins:secs"
+    :param seconds: The amount of seconds, an int
+    :return: A string of the presentable time.
+    """
+    return "%d:%d" % (seconds / 60, seconds % 60)
+
+
+def presentable_to_seconds(time):
+    """
+    Translates time from string to int.
+    :param time: string indicating time in the following format: "mins:secs"
+    :return: The amount of seconds
+    """
+    mins = int(time.split(':')[0])
+    secs = int(time.split(':')[1])
+    return (mins * 60) + secs
+
 
 class MainWindow(QtGui.QMainWindow):
     def __init__(self):
         QtGui.QMainWindow.__init__(self)
 
         self.centralwidget = QtGui.QWidget(self)
-        self.songs_table = QtGui.QTableWidget(self.centralwidget)
+        self.table = QtGui.QTableWidget(self.centralwidget)
         self.time_slider = QtGui.QSlider(self.centralwidget)
         self.time_display = QtGui.QLCDNumber(self.centralwidget)
         self.label = QtGui.QLabel(self.centralwidget)
@@ -42,6 +70,8 @@ class MainWindow(QtGui.QMainWindow):
         self.setupUi()
 
         self.time_display.display("00:00")
+        self.table.setSelectionBehavior(QtGui.QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
 
     def setupUi(self):
         self.setObjectName(_fromUtf8("self"))
@@ -65,34 +95,34 @@ class MainWindow(QtGui.QMainWindow):
         self.setFont(font)
         self.setStyleSheet(_fromUtf8("border-image: url(:/General/bg.jpg);"))
         self.centralwidget.setObjectName(_fromUtf8("centralwidget"))
-        self.songs_table.setGeometry(QtCore.QRect(30, 90, 710, 440))
-        self.songs_table.setStyleSheet(_fromUtf8("border-image: rgba(255, 255, 255, 0);\n"
-"selection-background-color: rgba(130, 130, 130, 100);\n"
-"selection-color: rgb(255, 255, 255);\n"
-"gridline-color: rgb(255, 255, 255);\n"
-"border-color: rgb(255, 255, 255);\n"
-"background-color: rgba(255, 255, 255, 0);\n"
-"colort:rgb(255, 255, 255);"))
-        self.songs_table.setFrameShape(QtGui.QFrame.StyledPanel)
-        self.songs_table.setFrameShadow(QtGui.QFrame.Sunken)
-        self.songs_table.setLineWidth(1)
-        self.songs_table.setMidLineWidth(0)
-        self.songs_table.setGridStyle(QtCore.Qt.SolidLine)
-        self.songs_table.setWordWrap(False)
-        self.songs_table.setObjectName(_fromUtf8("songs_table"))
-        self.songs_table.setColumnCount(4)
-        self.songs_table.setRowCount(1)
+        self.table.setGeometry(QtCore.QRect(30, 90, 710, 440))
+        self.table.setStyleSheet(_fromUtf8("border-image: rgba(255, 255, 255, 0);\n"
+                                           "selection-background-color: rgba(130, 130, 130, 100);\n"
+                                           "selection-color: rgb(255, 255, 255);\n"
+                                           "gridline-color: rgb(255, 255, 255);\n"
+                                           "border-color: rgb(255, 255, 255);\n"
+                                           "background-color: rgba(255, 255, 255, 0);\n"
+                                           "colort:rgb(255, 255, 255);"))
+        self.table.setFrameShape(QtGui.QFrame.StyledPanel)
+        self.table.setFrameShadow(QtGui.QFrame.Sunken)
+        self.table.setLineWidth(1)
+        self.table.setMidLineWidth(0)
+        self.table.setGridStyle(QtCore.Qt.SolidLine)
+        self.table.setWordWrap(False)
+        self.table.setObjectName(_fromUtf8("table"))
+        self.table.setColumnCount(4)
+        self.table.setRowCount(0)
         item = QtGui.QTableWidgetItem()
-        self.songs_table.setVerticalHeaderItem(0, item)
+        self.table.setVerticalHeaderItem(0, item)
         item = QtGui.QTableWidgetItem()
-        self.songs_table.setHorizontalHeaderItem(0, item)
+        self.table.setHorizontalHeaderItem(0, item)
         item = QtGui.QTableWidgetItem()
-        self.songs_table.setHorizontalHeaderItem(1, item)
+        self.table.setHorizontalHeaderItem(1, item)
         item = QtGui.QTableWidgetItem()
-        self.songs_table.setHorizontalHeaderItem(2, item)
+        self.table.setHorizontalHeaderItem(2, item)
         item = QtGui.QTableWidgetItem()
-        self.songs_table.setHorizontalHeaderItem(3, item)
-        self.songs_table.horizontalHeader().setDefaultSectionSize(175)
+        self.table.setHorizontalHeaderItem(3, item)
+        self.table.horizontalHeader().setDefaultSectionSize(173)
         self.time_slider.setGeometry(QtCore.QRect(30, 570, 710, 22))
         self.time_slider.setStyleSheet(_fromUtf8("border-image: rgba(255, 255, 255, 0);"))
         self.time_slider.setOrientation(QtCore.Qt.Horizontal)
@@ -434,7 +464,7 @@ class MainWindow(QtGui.QMainWindow):
 "color: rgb(255, 255, 255);"))
         self.logout_button.setObjectName(_fromUtf8("logout_button"))
         self.label_shadow.raise_()
-        self.songs_table.raise_()
+        self.table.raise_()
         self.time_slider.raise_()
         self.time_display.raise_()
         self.label.raise_()
@@ -450,14 +480,14 @@ class MainWindow(QtGui.QMainWindow):
 
     def retranslateUi(self, MainFrame):
         self.setWindowTitle(_translate("HARMONY", "HARMONY", None))
-        self.songs_table.setSortingEnabled(False)
-        item = self.songs_table.horizontalHeaderItem(0)
+        self.table.setSortingEnabled(False)
+        item = self.table.horizontalHeaderItem(0)
         item.setText(_translate("MainFrame", "Title", None))
-        item = self.songs_table.horizontalHeaderItem(1)
+        item = self.table.horizontalHeaderItem(1)
         item.setText(_translate("MainFrame", "Artist", None))
-        item = self.songs_table.horizontalHeaderItem(2)
-        item.setText(_translate("MainFrame", "Year", None))
-        item = self.songs_table.horizontalHeaderItem(3)
+        item = self.table.horizontalHeaderItem(2)
+        item.setText(_translate("MainFrame", "Album", None))
+        item = self.table.horizontalHeaderItem(3)
         item.setText(_translate("MainFrame", "Length", None))
         self.label.setText(_translate("MainFrame", "<html><head/><body><p><span style=\" font-size:36pt; font-weight:600; color:#ffffff;\">Hello, 123456789012</span></p></body></html>", None))
         self.label_shadow.setText(_translate("MainFrame", "<html><head/><body><p><span style=\" font-size:36pt; font-weight:600; color:#adadad;\">Hello, 123456789012</span></p></body></html>", None))
@@ -477,12 +507,63 @@ class MainWindow(QtGui.QMainWindow):
         self.label.setText(_translate("MainFrame", LABEL_TEXT_FORMAT % text, None))
         self.label_shadow.setText(_translate("MainFrame", LABEL_SHADOW_TEXT_FORMAT % text, None))
 
+    def add_song(self, properties):
+        """
+        This method will add another song to the table.
+        :param properties: A dictionary which contains the table's keys. The song will not be added to table if there
+        is at least one label which has no key in the dictionary.
+        :return: None
+        """
+        row_pos = self.table.rowCount()
+        self.table.insertRow(row_pos)
+        for key in TABLE_COLUMN_INDEX.keys():
+            value = QtGui.QTableWidgetItem(properties[key])
+            value_font = QtGui.QFont()
+            value_font.setFamily(_fromUtf8("Gadugi"))
+            value_font.setPointSize(15)
+            value.setFont(value_font)
+            self.table.setItem(row_pos, TABLE_COLUMN_INDEX[key], value)
+
+    def clear_table(self):
+        """
+        Deletes all the songs from the table.
+        :return: None
+        """
+        for i in range(self.table.rowCount()):
+            self.table.removeRow(0)
+
+    def get_selected_tag(self, tag):
+        """
+        Returns the tag of the selected song.
+        :param tag: The wanted tag, for example- 'title'
+        :return: the value of the tag.
+        """
+        try:
+            selected_row = self.table.selectedRanges()[0].topRow()
+            return self.table.item(selected_row, TABLE_COLUMN_INDEX[tag]).text()
+        except IndexError:
+            return None
+
+    def update_time_display(self):
+        """
+        This method checks the selected song's length, and the slider
+        :return: None
+        """
+        song_length = self.get_selected_tag('length')
+        if song_length is None:
+            self.time_display.display("00:00")
+            return
+        song_length = presentable_to_seconds(song_length)
+        precent = self.time_slider.value()
+        seconds = song_length * precent / 100.0
+        self.time_display.display(presentable_time(int(seconds)))
 
 if __name__ == '__main__':
     app = QtGui.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
 
     window = MainWindow()
+    window.add_song({'artist': 'DEAF KEV', 'album': 'Unknown', 'title': 'Samurai', 'length': '5:36'})
     window.show()
 
     sys.exit(app.exec_())

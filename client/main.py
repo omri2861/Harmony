@@ -4,10 +4,12 @@ import sys
 from PyQt4 import QtGui
 import threading
 import main_window
+from time import sleep
+import pickle
+import re
 
 sys.path.insert(0, r'F:\Python\HARMONY\src\server')
 import management
-from time import sleep
 
 __author__ = "Omri Levy"
 
@@ -18,12 +20,29 @@ The main file of the client program, will run the app and interact with the user
 SERVER_IP = "10.0.0.13"
 SERVER_PORT = 1729
 SERVER_ADDRESS = SERVER_IP, SERVER_PORT
-LOGIN_COMMAND = "LOGIN"
 BAND_WIDTH = 1024
 CONNECTION_ATTEMPTS = 5
 SOCKET_TIMEOUT = 2
 USERNAME_LEN = 8, 12
 PASSWORD_LEN = 8, 14
+
+
+def receive_full_message(sock):
+    """
+    Receive the full message which includes all the data from the given socket.
+    :param sock: The socket that should be received from.
+    :return: A Message object which contains all the data.
+    """
+    result = sock.recv(BAND_WIDTH)
+    bytes_to_read = int(re.findall(re.compile(management.HDTP_SIZE_PATTERN), result)[0])
+    bytes_to_read -= len(re.findall(re.compile("DATA:\r\n(.*)", re.DOTALL), result)[0])
+    while bytes_to_read > BAND_WIDTH:
+        piece = sock.recv(BAND_WIDTH)
+        result += piece
+        bytes_to_read -= len(piece)
+    if bytes_to_read > 0:
+        result += sock.recv(bytes_to_read)
+    return management.ReceivedMessage(result)
 
 
 def dialog(text, informative):
@@ -93,6 +112,26 @@ def error_message_box(excepted):
     return msg
 
 
+def presentable_time(seconds):
+    """
+    Converts the amount of seconds to the format: "mins:secs"
+    :param seconds: The amount of seconds, an int
+    :return: A string of the presentable time.
+    """
+    return "%d:%d" % (seconds / 60, seconds % 60)
+
+
+def presentable_to_seconds(time):
+    """
+    Translates time from string to int.
+    :param time: string indicating time in the following format: "mins:secs"
+    :return: The amount of seconds
+    """
+    mins = int(time.split(':')[0])
+    secs = int(time.split(':')[1])
+    return (mins * 60) + secs
+
+
 class ThreadedClient(object):
     """
     This class is meant to help the client program execute blocking commands from the GUI window while still responding
@@ -106,7 +145,6 @@ class ThreadedClient(object):
         Sets up all the GUI windows and starts all the threads.
         """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(SOCKET_TIMEOUT)
         self.signals = {
             'connected': False,
             'correct-password': False,
@@ -119,7 +157,7 @@ class ThreadedClient(object):
         self.password = ""
 
         self.login_window = login.LoginWindow()
-        self.login_window.set_login(self.request_login)
+        self.login_window.set_login(self.onLogin)
         self.login_window.set_signup(feature_not_available)
 
         self.main_frame = main_window.MainWindow()
@@ -129,14 +167,35 @@ class ThreadedClient(object):
 
         self.threads = {
             'login': threading.Thread(target=self.login),
-            'establish_connection': threading.Thread(target=self.establish_connection)
+            'establish_connection': threading.Thread(target=self.establish_connection),
+            'update_time_display': threading.Thread(target=self.update_time_display)
         }
 
         for thread in self.threads.values():
             thread.setDaemon(True)
             thread.start()
 
-    def request_login(self):
+    def update_time_display(self):
+        """
+        Constantly updates the time display of the main window.
+        Should be threaded.
+        :return: None
+        """
+        while True:
+            self.main_frame.update_time_display()
+
+    def receive_songs_data(self):
+        """
+        Receives the songs data from the server.
+        :return: None
+        """
+        msg = receive_full_message(self.sock)
+        songs_properties = pickle.loads(msg.get_data()['data'])
+        for song_dict in songs_properties:
+            song_dict['length'] = presentable_time(song_dict['time_secs'])
+            self.main_frame.add_song(song_dict)
+
+    def onLogin(self):
         """
         This method will check if it is possible to send a login message to the server. If so, it will signal the thread
         which is taking care of the login to send a message to the server. It will respond to the user with the correct
@@ -159,6 +218,7 @@ class ThreadedClient(object):
                 self.login_window.setShown(False)
                 self.main_frame.set_label_text("Hello, "+self.username)
                 self.main_frame.show()
+                self.receive_songs_data()
             elif self.signals['correct-username']:
                 msg = dialog("Incorrect Password", '')
                 msg.exec_()
@@ -183,12 +243,14 @@ class ThreadedClient(object):
         :return: None
         """
         self.signals['connected'] = False
+        self.sock.settimeout(SOCKET_TIMEOUT)
         while not self.signals['connected']:
             try:
                 self.sock.connect(SERVER_ADDRESS)
                 self.signals['connected'] = True
             except socket.error, socket.timeout:
                 pass
+        self.sock.settimeout(None)
 
     def login(self):
         """
@@ -199,7 +261,7 @@ class ThreadedClient(object):
         """
         while True:
             if self.signals['login_requested'] and self.signals['connected']:
-                msg = management.Message(management.LOGIN, self.login_window.get_username(),
+                msg = management.Message(management.HDTP_COMMANDS['login'], self.login_window.get_username(),
                                          self.login_window.get_password())
                 self.sock.send(str(msg))
                 answer = management.ReceivedMessage(self.sock.recv(BAND_WIDTH))
@@ -224,11 +286,12 @@ class ThreadedClient(object):
         Send a logout message to the server.
         :return: None
         """
-        logout_msg = management.Message(management.LOGOUT, self.username, self.password)
+        logout_msg = management.Message(management.HDTP_COMMANDS['logout'], self.username, self.password)
         self.sock.send(str(logout_msg))
         self.sock.close()  # When the server receives a logout message, it automatically closes the connection.
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         threading.Thread(target=self.establish_connection).start()
+        threading.Thread(target=self.main_frame.clear_table).start()
         self.signals['correct-username'] = False
         self.signals['correct-password'] = False
         self.signals['logged-in'] = False
