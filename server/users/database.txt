@@ -1,2 +1,4 @@
 USERNAME: omri2861
 PASSWORD: omriiscool
+USERNAME: dadik1234
+PASSWORD: eldad_kap12
