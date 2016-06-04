@@ -51,6 +51,7 @@ HDTP_COMMANDS = {
 }
 HDTP_SIZE_PATTERN = "SIZE: ([0-9]*)"
 HDTP_DATA_PATTERN = "DATA:" + LINE_BREAK + "(.*)"
+USERS_DIR = "users"
 
 
 class User(object):
@@ -76,7 +77,7 @@ class User(object):
         self._username = username
         self._password = password
 
-        self.dir = os.curdir + os.sep + 'users' + os.sep + str(self._username)
+        self.dir = os.curdir + os.sep + USERS_DIR + os.sep + str(self._username)
         if not os.path.isdir(self.dir):
             os.mkdir(self.dir)
 
@@ -146,6 +147,22 @@ class User(object):
             if song.properties['file_path'] == song_path:
                 return song
         return None
+
+    def delete_song(self, song_path):
+        """
+        Deletes the song from the server's database.
+        Note: This procedure deletes the song *permanently*!
+        :param song_path: The song's file path
+        :return: None
+        """
+        song = self.get_song_by_path(song_path)
+        if song is None:
+            return
+        if os.path.isfile(song.mp3_path):
+            os.remove(song.mp3_path)
+        if os.path.isfile(song.wav_path):
+            os.remove(song.wav_path)
+        self.songs.remove(song)
 
 
 class NewUser(User):
