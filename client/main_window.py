@@ -37,7 +37,17 @@ def presentable_time(seconds):
     :param seconds: The amount of seconds, an int
     :return: A string of the presentable time.
     """
-    return "%d:%d" % (seconds / 60, seconds % 60)
+    mins = seconds / 60
+    if mins < 10:
+        mins = "0%d" % mins
+    else:
+        mins = str(mins)
+    secs = seconds % 60
+    if secs < 10:
+        secs = "0%d" % secs
+    else:
+        secs = str(secs)
+    return mins + ":" + secs
 
 
 def presentable_to_seconds(time):
@@ -63,7 +73,7 @@ class MainWindow(QtGui.QMainWindow):
         self.label_shadow = QtGui.QLabel(self.centralwidget)
         self.upload_button = QtGui.QPushButton(self.centralwidget)
         self.play_button = QtGui.QPushButton(self.centralwidget)
-        self.pause_button = QtGui.QPushButton(self.centralwidget)
+        self.stop_button = QtGui.QPushButton(self.centralwidget)
         self.delete_button = QtGui.QPushButton(self.centralwidget)
         self.logout_button = QtGui.QPushButton(self.centralwidget)
 
@@ -127,6 +137,7 @@ class MainWindow(QtGui.QMainWindow):
         self.time_slider.setStyleSheet(_fromUtf8("border-image: rgba(255, 255, 255, 0);"))
         self.time_slider.setOrientation(QtCore.Qt.Horizontal)
         self.time_slider.setObjectName(_fromUtf8("time_slider"))
+        self.time_slider.setMaximum(100)
         self.time_display.setGeometry(QtCore.QRect(560, 620, 180, 60))
         self.time_display.setStyleSheet(_fromUtf8("border-image: rgba(255, 255, 255, 0);\n"
 "color: rgb(255, 255, 255);"))
@@ -277,7 +288,7 @@ class MainWindow(QtGui.QMainWindow):
 "background-color: rgba(255, 255, 255, 100);\n"
 "color: rgb(255, 255, 255);"))
         self.play_button.setObjectName(_fromUtf8("play_button"))
-        self.pause_button.setGeometry(QtCore.QRect(195, 630, 140, 40))
+        self.stop_button.setGeometry(QtCore.QRect(195, 630, 140, 40))
         palette = QtGui.QPalette()
         brush = QtGui.QBrush(QtGui.QColor(255, 255, 255))
         brush.setStyle(QtCore.Qt.SolidPattern)
@@ -333,12 +344,12 @@ class MainWindow(QtGui.QMainWindow):
         brush = QtGui.QBrush(QtGui.QColor(255, 255, 255, 100))
         brush.setStyle(QtCore.Qt.SolidPattern)
         palette.setBrush(QtGui.QPalette.Disabled, QtGui.QPalette.Window, brush)
-        self.pause_button.setPalette(palette)
-        self.pause_button.setStyleSheet(_fromUtf8("border-image:rgb(255, 255, 255);\n"
+        self.stop_button.setPalette(palette)
+        self.stop_button.setStyleSheet(_fromUtf8("border-image:rgb(255, 255, 255);\n"
 "font: 22pt \"HP Simplified\";\n"
 "background-color: rgba(255, 255, 255, 100);\n"
 "color: rgb(255, 255, 255);"))
-        self.pause_button.setObjectName(_fromUtf8("pause_button"))
+        self.stop_button.setObjectName(_fromUtf8("stop_button"))
         self.delete_button.setGeometry(QtCore.QRect(790, 490, 140, 40))
         palette = QtGui.QPalette()
         brush = QtGui.QBrush(QtGui.QColor(255, 255, 255))
@@ -470,7 +481,7 @@ class MainWindow(QtGui.QMainWindow):
         self.label.raise_()
         self.upload_button.raise_()
         self.play_button.raise_()
-        self.pause_button.raise_()
+        self.stop_button.raise_()
         self.delete_button.raise_()
         self.logout_button.raise_()
         self.setCentralWidget(self.centralwidget)
@@ -493,7 +504,7 @@ class MainWindow(QtGui.QMainWindow):
         self.label_shadow.setText(_translate("MainFrame", "<html><head/><body><p><span style=\" font-size:36pt; font-weight:600; color:#adadad;\">Hello, 123456789012</span></p></body></html>", None))
         self.upload_button.setText(_translate("MainFrame", "Upload", None))
         self.play_button.setText(_translate("MainFrame", "Play", None))
-        self.pause_button.setText(_translate("MainFrame", "Pause", None))
+        self.stop_button.setText(_translate("MainFrame", "Stop", None))
         self.delete_button.setText(_translate("MainFrame", "Delete", None))
         self.logout_button.setText(_translate("MainFrame", "Logout", None))
 
@@ -535,35 +546,43 @@ class MainWindow(QtGui.QMainWindow):
     def get_selected_tag(self, tag):
         """
         Returns the tag of the selected song.
-        :param tag: The wanted tag, for example- 'title'
+        :param tag: The wanted tag, for example- 'file_path'
         :return: the value of the tag.
         """
-        try:
-            selected_row = self.table.selectedRanges()[0].topRow()
+        selected_row = self.get_selected_row()
+        if selected_row is not None and tag in TABLE_COLUMN_INDEX.keys():
             return self.table.item(selected_row, TABLE_COLUMN_INDEX[tag]).text()
+        else:
+            return None
+
+    def get_selected_row(self):
+        """
+        :return: The index of the selected row.
+        """
+        try:
+            return self.table.selectedRanges()[0].topRow()
         except IndexError:
             return None
 
-    def update_time_display(self):
+    def update_time_display(self, seconds):
         """
-        This method checks the selected song's length, and the slider
+        Presents the seconds in the time display and updates the slider accordingly.
+        :param seconds: The time which should be displayed.
         :return: None
         """
-        song_length = self.get_selected_tag('length')
-        if song_length is None:
-            self.time_display.display("00:00")
-            return
-        song_length = presentable_to_seconds(song_length)
-        precent = self.time_slider.value()
-        seconds = song_length * precent / 100.0
-        self.time_display.display(presentable_time(int(seconds)))
+        if self.get_selected_row() is not None:
+            song_length = presentable_to_seconds(str(self.get_selected_tag('length')))
+            percent = (100 * seconds) / song_length
+            self.time_slider.setValue(int(percent))
+        self.time_display.display(presentable_time(seconds))
+
 
 if __name__ == '__main__':
     app = QtGui.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
 
     window = MainWindow()
-    window.add_song({'artist': 'DEAF KEV', 'album': 'Unknown', 'title': 'Samurai', 'length': '5:36'})
+    window.add_song({'artist': 'DEAF KEV', 'album': 'Unknown', 'file_path': 'Samurai', 'length': '5:36'})
     window.show()
 
     sys.exit(app.exec_())

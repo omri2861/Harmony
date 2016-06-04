@@ -25,6 +25,8 @@ SELF_IP = get_self_ip()
 SELF_ADDRESS = SELF_IP, SELF_PORT
 SERVER_SOCK_TIMEOUT = 5
 BAND_WIDTH = 1024
+FRAMES_PER_MESSAGE = 10000
+FRAME_SIZE = 4
 
 
 def accept_login(sock, msg, manager, waiting_messages):
@@ -55,23 +57,27 @@ def accept_login(sock, msg, manager, waiting_messages):
         data_msg = management.Message(management.HDTP_COMMANDS['tags'], msg.username, msg.password,
                                       {'data': user.get_songs_properties()})
         waiting_messages.append((sock, str(data_msg)))
-        print data_msg
-        print len(msg._data)
         return user
 
 
-def receive_and_handle_msg(client, online_clients, manager, waiting_messages):
+def receive_and_handle_msg(client, online_clients, manager, waiting_messages, open_songs):
     """
     This function will receive a message from a client and will then handle it's request.
     It will update the given parameters accordingly.
     :param client: A tuple which contains the user object and it's socket.
     :param online_clients: The list of connected clients, each client is a tuple: (user, socket).
     :param manager: The database manager object of the running server.
-    :param waiting_messages:
+    :param waiting_messages: The list of messages waiting to be sent to the clients.
+    :param open_songs: A list of the songs which are currently being streamed.
     :return: None
     """
     user, sock = client
-    raw_msg = sock.recv(BAND_WIDTH)
+    try:
+        raw_msg = sock.recv(BAND_WIDTH)
+    except socket.error:
+        online_clients.remove(client)
+        return
+        # Connection was forcibly closed from the client side during runtime
     if not re.findall(re.compile(management.HDTP_PATTERN), raw_msg):
         return
     msg = receive_full_message(raw_msg, sock)
@@ -85,9 +91,43 @@ def receive_and_handle_msg(client, online_clients, manager, waiting_messages):
             pass  # This user is connected on another device so there is no need to delete a temporary version of him,
         # just add a new one.
         online_clients.append((new_user, sock))
-    elif msg.request == management.HDTP_COMMANDS['login'] and user.is_authorized(msg.password):
+    elif not user.is_authorized(msg.password):
+        return
+    elif msg.request == management.HDTP_COMMANDS['logout']:
         sock.close()
         online_clients.remove(client)
+    elif msg.request == management.HDTP_COMMANDS['info']:
+        song_path = msg.get_data()['file_path']
+        song = user.get_song_by_path(song_path)
+        song.open_data()
+        return_msg = management.Message(msg.request, msg.username, msg.password, song.info)
+        return_msg_data = return_msg.get_data()
+        return_msg_data['msg_size'] = FRAMES_PER_MESSAGE * FRAME_SIZE
+        return_msg_data['frames_per_msg'] = FRAMES_PER_MESSAGE
+        return_msg.set_data(return_msg_data)
+        waiting_messages.append((sock, str(return_msg)))
+    elif msg.request == management.HDTP_COMMANDS['stream']:
+        song_path = msg.get_data()['file_path']
+        song = user.get_song_by_path(song_path)
+        open_songs.append((sock, song))
+    elif msg.request == management.HDTP_COMMANDS['close_song']:
+        song_path = msg.get_data()['file_path']
+        song = find_song_by_path(song_path, [song for sock, song in open_songs])
+        song.close_data()
+        open_songs.remove((sock, song))
+
+
+def find_song_by_path(song_path, songs_list):
+    """
+    Finds the management.Song object according to the given song_path path.
+    :param song_path: The song_path path.
+    :param songs_list: The list of the songs objects.
+    :return: management.Song which matches the song_path path. If not found, returns None.
+    """
+    for song in songs_list:
+        if song.properties['file_path'] == song_path:
+            return song
+    return None
 
 
 def delete_client_by_sock(sock, clients):
@@ -149,6 +189,19 @@ def get_user_by_socket(sock, clients):
             return user
 
 
+def send_songs_data(open_songs, waiting_messages):
+    """
+    This function will add data of open songs to the waiting messages.
+    :param open_songs: The list of songs which are currently streaming.
+    :param waiting_messages: The list of the messages waiting to be sent to the clients.
+    :return:
+    """
+    for sock, song in open_songs:
+        frames = song.read_frames(FRAMES_PER_MESSAGE)
+        waiting_messages.append((sock, frames))
+        print "sending..."
+
+
 def main():
     """
     The main function of the server, will take care of all the requests and run the server.
@@ -159,6 +212,7 @@ def main():
     clients = []
     running = True
     waiting_messages = []
+    open_songs = []
 
     server_sock.settimeout(SERVER_SOCK_TIMEOUT)
     server_sock.bind(SELF_ADDRESS)
@@ -180,7 +234,8 @@ def main():
                 #  message
             else:
                 sending_user = get_user_by_socket(sock, clients)
-                receive_and_handle_msg((sending_user, sock), clients, database_manager, waiting_messages)
+                receive_and_handle_msg((sending_user, sock), clients, database_manager, waiting_messages, open_songs)
+        send_songs_data(open_songs, waiting_messages)
         send_messages(waiting_messages, writable)
 
 

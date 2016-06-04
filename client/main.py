@@ -7,6 +7,7 @@ import main_window
 from time import sleep
 import pickle
 import re
+from pyaudio import PyAudio
 
 sys.path.insert(0, r'F:\Python\HARMONY\src\server')
 import management
@@ -25,6 +26,23 @@ CONNECTION_ATTEMPTS = 5
 SOCKET_TIMEOUT = 2
 USERNAME_LEN = 8, 12
 PASSWORD_LEN = 8, 14
+FRAMES_PER_REQUEST = 1000
+
+
+def clean_buffer(sock):
+    """
+    Cleans the buffer of the sock.
+    :param sock: The socket that should be cleaned.
+    :return: None
+    """
+    sock.settimeout(0.01)
+    flag = True
+    while flag:
+        try:
+            sock.recv(BAND_WIDTH)
+        except socket.timeout:
+            flag = False
+    sock.settimeout(None)
 
 
 def receive_full_message(sock):
@@ -118,7 +136,17 @@ def presentable_time(seconds):
     :param seconds: The amount of seconds, an int
     :return: A string of the presentable time.
     """
-    return "%d:%d" % (seconds / 60, seconds % 60)
+    mins = seconds / 60
+    if mins < 10:
+        mins = "0%d" % mins
+    else:
+        mins = str(mins)
+    secs = seconds % 60
+    if secs < 10:
+        secs = "0%d" % secs
+    else:
+        secs = str(secs)
+    return mins + ":" + secs
 
 
 def presentable_to_seconds(time):
@@ -130,6 +158,82 @@ def presentable_to_seconds(time):
     mins = int(time.split(':')[0])
     secs = int(time.split(':')[1])
     return (mins * 60) + secs
+
+
+class Stream(object):
+    """
+    This class will help the client stream wav frames from the server.
+    """
+    def __init__(self, file_path, info=None):
+        """
+        Initializes a stream object.
+        :param file_path: The server file path of the song.
+        :param info: A dictionary containing the stream's information. If empty, a string will not be created.
+        """
+        self.file_path = file_path
+        self.output = None
+        self.streamer = None
+        self.current_frame = 0
+        self.current_secs = 0
+        self.frame_count = 0
+        self.frame_rate = 0
+        if type(info) is dict:
+            self.set_stream_info(info)
+
+    def set_stream_info(self, info):
+        """
+        Sets the stream settings such as format, channels, framerate and so on.
+        :param info: A dictionary containing the song framerate,
+        :return:
+        """
+        if type(info) is not dict:
+            return
+        self.streamer = PyAudio()
+        self.output = self.streamer.open(
+            format=self.streamer.get_format_from_width(info['width']),
+            channels=info['channels'],
+            rate=info['framerate'],
+            output=True
+        )
+        self.frame_rate = info['framerate']
+
+    def play_frames(self, frame_count, frames):
+        """
+        This method will receive the frames which should be played, output them and will update the stream parameters
+        accordingly.
+        :param frame_count: How many frames were given.
+        :param frames: The raw data of the frames.
+        :return: None
+        """
+        if self.output is not None:
+            self.output.write(frames)
+            self.current_frame += frame_count
+            if int(self.current_frame / self.frame_rate) > self.current_secs:
+                self.current_secs += 1
+
+    def close(self):
+        """
+        Closes the stream.
+        :return: None
+        """
+        if self.output is not None:
+            self.output.close()
+            del self.output
+            self.output = None
+            self.streamer.terminate()
+            del self.streamer
+            self.streamer = None
+
+    def reset(self, file_path, info=None):
+        """
+        This method will re- set the object so a the stream will play a new song.
+        :param file_path: The new song's file path.
+        :param info: The new song's information dictionary.
+        :return: None
+        """
+        if self.output is not None or self.streamer is not None:
+            self.close()
+        self.__init__(file_path, info)
 
 
 class ThreadedClient(object):
@@ -150,11 +254,15 @@ class ThreadedClient(object):
             'correct-password': False,
             'correct-username': False,
             'logged-in': False,
-            'login_requested': False
+            'login_requested': False,
+            'stream': True
         }
 
         self.username = ""
         self.password = ""
+
+        self.stream = None
+        self.songs_file_paths = {}
 
         self.login_window = login.LoginWindow()
         self.login_window.set_login(self.onLogin)
@@ -164,11 +272,15 @@ class ThreadedClient(object):
         self.main_frame.logout_button.clicked.connect(self.onLogout)
         self.main_frame.delete_button.clicked.connect(feature_not_available)
         self.main_frame.upload_button.clicked.connect(feature_not_available)
+        self.main_frame.stop_button.clicked.connect(self.onStop)
+        self.main_frame.play_button.clicked.connect(self.onPlay)
+        self.selected_row = None
 
         self.threads = {
             'login': threading.Thread(target=self.login),
             'establish_connection': threading.Thread(target=self.establish_connection),
-            'update_time_display': threading.Thread(target=self.update_time_display)
+            'update_time_display': threading.Thread(target=self.update_time_display),
+            'on_selection_change': threading.Thread(target=self.on_selection_change)
         }
 
         for thread in self.threads.values():
@@ -182,7 +294,10 @@ class ThreadedClient(object):
         :return: None
         """
         while True:
-            self.main_frame.update_time_display()
+            if self.stream is None:
+                self.main_frame.update_time_display(0)
+            else:
+                self.main_frame.update_time_display(self.stream.current_secs)
 
     def receive_songs_data(self):
         """
@@ -193,6 +308,8 @@ class ThreadedClient(object):
         songs_properties = pickle.loads(msg.get_data()['data'])
         for song_dict in songs_properties:
             song_dict['length'] = presentable_time(song_dict['time_secs'])
+            song_title = song_dict['title']
+            self.songs_file_paths[song_title] = song_dict['file_path']
             self.main_frame.add_song(song_dict)
 
     def onLogin(self):
@@ -292,6 +409,8 @@ class ThreadedClient(object):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         threading.Thread(target=self.establish_connection).start()
         threading.Thread(target=self.main_frame.clear_table).start()
+        if self.stream is not None:
+            self.stream.close()
         self.signals['correct-username'] = False
         self.signals['correct-password'] = False
         self.signals['logged-in'] = False
@@ -304,6 +423,7 @@ class ThreadedClient(object):
         the 'logout' button is pressed.
         :return: None
         """
+        self.onStop()
         threading.Thread(target=self.logout).start()
 
     def exit_and_logout(self, exit_code):
@@ -313,11 +433,72 @@ class ThreadedClient(object):
         :parameter exit_code: The exit code given.
         :returns: exit_code
         """
+        if self.sock is not None:
+            self.onStop()
+        if self.stream is not None:
+            self.stream.close()
         if self.signals['logged-in']:
             self.logout()
         elif self.signals['connected']:
             self.sock.close()
         return exit_code
+
+    def on_selection_change(self):
+        """
+        This method checks if the selected song has changed. If so, it will change the class' properties accordingly.
+        This method should be threaded.
+        :return: None
+        """
+        while True:
+            if self.main_frame.get_selected_row() != self.selected_row:
+                self.selected_row = self.main_frame.get_selected_row()
+                self.onStop()
+
+    def start_stream(self):
+        """
+        Starts streaming the data of the selected song from the server.
+        Should be threaded.
+        :return: None
+        """
+        self.signals['stream'] = True
+        selected_row = self.main_frame.get_selected_row()
+        if selected_row is None:
+            return
+
+        song_title = str(self.main_frame.get_selected_tag('title'))  # from unicode, because PyQt4 stores in unicode
+        server_song_path = self.songs_file_paths[song_title]
+        msg = management.Message(management.HDTP_COMMANDS['info'], self.username, self.password,
+                                 {'file_path': server_song_path})
+        self.sock.send(str(msg))
+        answer = receive_full_message(self.sock)
+        if self.stream is None:
+            self.stream = Stream(server_song_path, answer.get_data())
+        else:
+            self.stream.reset(server_song_path, answer.get_data())
+        msg_size = answer.get_data()['msg_size']
+        frames_per_msg = answer.get_data()['frames_per_msg']
+        msg = management.Message(management.HDTP_COMMANDS['stream'], self.username, self.password,
+                                 {'file_path': server_song_path})
+        self.sock.send(str(msg))
+        data = self.sock.recv(msg_size)
+        while self.signals['stream'] and data != "":
+            self.stream.play_frames(frames_per_msg, data)
+            data = self.sock.recv(msg_size)
+
+        msg = management.Message(management.HDTP_COMMANDS['close_song'], self.username, self.password,
+                                 {'file_path': server_song_path})
+        self.sock.send(str(msg))
+        clean_buffer(self.sock)
+        self.signals['stream'] = True
+
+    def onStop(self):
+        self.signals['stream'] = False
+        clean_buffer(self.sock)
+
+    def onPlay(self):
+        thread = threading.Thread(target=self.start_stream)
+        thread.setDaemon(True)
+        thread.start()
 
 
 def main():

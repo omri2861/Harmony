@@ -44,7 +44,10 @@ HDTP_FLAGS = {
 HDTP_COMMANDS = {
     'login': 'LOGIN',
     'logout': 'LOGOUT',
-    'tags': 'TAGS'
+    'tags': 'TAGS',
+    'info': 'INFO',
+    'close_song': 'CLOSE',
+    'stream': 'STREAM'
 }
 HDTP_SIZE_PATTERN = "SIZE: ([0-9]*)"
 HDTP_DATA_PATTERN = "DATA:" + LINE_BREAK + "(.*)"
@@ -132,6 +135,18 @@ class User(object):
             songs_properties.append(song.properties)
         return pickle.dumps(songs_properties)
 
+    def get_song_by_path(self, song_path):
+        """
+        Finds the song object according to the given song path.
+        :param song_path: The path of the song which should be found.
+        :return: The management.Song object of the song. None if there was no match.
+        """
+        for song in self.songs:
+            print song.properties['file_path']
+            if song.properties['file_path'] == song_path:
+                return song
+        return None
+
 
 class NewUser(User):
     """
@@ -210,7 +225,8 @@ class Message(object):
         if data_dict is None or type(data_dict) is not dict:
             self._data = ""
             return
-        self._data = '&'.join(['%s=%s' % (key, data_dict[key].encode('base64')) for key in data_dict.keys()])
+        self._data = '&'.join(
+            ['%s=%s' % (key, str(data_dict[key]).encode('base64').rstrip()) for key in data_dict.keys()])
 
     def get_data(self):
         """
@@ -222,6 +238,10 @@ class Message(object):
         for attr in self._data.split('&'):
             key, value = attr.split('=', 1)[0], attr.split('=', 1)[1]
             result[key] = value.decode('base64').rstrip()
+            try:
+                result[key] = int(result[key])
+            except ValueError:
+                pass
         return result
 
     def get_size(self):
@@ -275,6 +295,7 @@ class Song(object):
 
             properties_analyzer = eyed3.load(self.mp3_path)
             self.properties = {
+                'file_path': filename,
                 'artist': copy.copy(properties_analyzer.tag.artist),
                 'title': copy.copy(properties_analyzer.tag.title),
                 'album': copy.copy(properties_analyzer.tag.album),
@@ -283,8 +304,8 @@ class Song(object):
 
             properties_analyzer.tag.save()
 
-            if self.properties['title'] is None:
-                self.properties['title'] = self.mp3_path[self.mp3_path.rindex(os.sep):self.mp3_path.rindex('.')]
+            if self.properties['file_path'] is None:
+                self.properties['file_path'] = self.mp3_path[self.mp3_path.rindex(os.sep):self.mp3_path.rindex('.')]
 
             for field in self.properties.keys():
                 if self.properties[field] is None:
@@ -292,32 +313,78 @@ class Song(object):
                 elif type(self.properties[field]) is unicode:
                     self.properties[field] = str(self.properties[field])
 
-            if not os.path.isfile(self.wav_path):
-                threading.Thread(target=self.convert_to_wav).start()
-
             self.info = {}
+            self.reader = None
+
+            if not os.path.isfile(self.wav_path):
+                threading.Thread(target=self._convert_to_wav).start()
+            else:
+                self._load_info()
+
+            self.data_loaded = False
+
         else:
             raise ValueError("HARMONY only supports existing mp3 files.\nFile Given:\n%s\n" % filename)
 
-    def load_data(self):
+    def open_data(self):
         """
-        This method will load the wave dile data to the class in order to stream. It will not be loaded with the
-        init method due to efficiency.
+        This method will load the wave file data to the class in order to stream. It will not be loaded with the
+        init method so the server could be memory efficient.
         :return: None
         """
-        info_analyzer = wave.Wave_read(self.wav_path)
-        self.info = {
-            'frames': info_analyzer.getnframes(),
-            'channels': info_analyzer.getnchannels(),
-            'frame_rate': info_analyzer.getframerate(),
-            'width': info_analyzer.getsampwidth()
-        }
+        if self.data_loaded:
+            return
+        self.reader = wave.Wave_read(self.wav_path)
+        self.data_loaded = True
 
-        info_analyzer.close()
+    def close_data(self):
+        """
+        This method will erase the wave data from the class attributes. This method exists so the server could be memory
+        efficient.
+        :return: None
+        """
+        if not self.data_loaded:
+            return
+        self.reader.close()
+        del self.reader
+        self.reader = None
+        self.data_loaded = False
 
-    def convert_to_wav(self):
+    def _convert_to_wav(self):
         """
         This method will convert the mp3 song file to wav, so the server could handle it's data.
         :return: None
         """
         audioseg.from_mp3(self.mp3_path).export(self.wav_path, 'wav')
+        self._load_info()
+
+    def _load_info(self):
+        """
+        Loads the info of the wav file to the class' attributes.
+        :return: None
+        """
+        if os.path.isfile(self.wav_path):
+            info_analyzer = wave.Wave_read(self.wav_path)
+            self.info['width'] = info_analyzer.getsampwidth()
+            self.info['frames'] = info_analyzer.getnframes()
+            self.info['framerate'] = info_analyzer.getframerate()
+            self.info['channels'] = info_analyzer.getnchannels()
+            info_analyzer.close()
+
+    def read_frames(self, count):
+        """
+        Returns frames of the wav data, from the frame on index, count frames will be returned.
+        :param count: How many frames should be read.
+        :return: A raw string of the read frames. If the data is not loaded, or the wav is empty, an empty string will
+        be returned.
+        :rtype: str
+        """
+        if not self.data_loaded:
+            return ""
+        return self.reader.readframes(count)
+
+    def __eq__(self, other):
+        try:
+            return self.mp3_path == other.mp3_path
+        except AttributeError:
+            return False
