@@ -570,19 +570,9 @@ class MainWindow(QtGui.QMainWindow):
         :param seconds: The time which should be displayed.
         :return: None
         """
-        if self.get_selected_row() is not None:
-            song_length = presentable_to_seconds(str(self.get_selected_tag('length')))
+        song_length = self.get_selected_tag('length')
+        if song_length is not None:
+            song_length = presentable_to_seconds(str(song_length))
             percent = (100 * seconds) / song_length
             self.time_slider.setValue(int(percent))
         self.time_display.display(presentable_time(seconds))
-
-
-if __name__ == '__main__':
-    app = QtGui.QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
-
-    window = MainWindow()
-    window.add_song({'artist': 'DEAF KEV', 'album': 'Unknown', 'file_path': 'Samurai', 'length': '5:36'})
-    window.show()
-
-    sys.exit(app.exec_())
