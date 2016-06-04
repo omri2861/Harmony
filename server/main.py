@@ -78,8 +78,11 @@ def receive_and_handle_msg(client, online_clients, manager, waiting_messages, op
         online_clients.remove(client)
         return
         # Connection was forcibly closed from the client side during runtime
+
     if not re.findall(re.compile(management.HDTP_PATTERN), raw_msg):
         return
+        # The sender is not using HDTP protocol, so I can't take him seriously.
+
     msg = receive_full_message(raw_msg, sock)
 
     if msg.request == management.HDTP_COMMANDS['login']:
@@ -91,30 +94,70 @@ def receive_and_handle_msg(client, online_clients, manager, waiting_messages, op
             pass  # This user is connected on another device so there is no need to delete a temporary version of him,
         # just add a new one.
         online_clients.append((new_user, sock))
+
     elif not user.is_authorized(msg.password):
         return
+
     elif msg.request == management.HDTP_COMMANDS['logout']:
         sock.close()
         online_clients.remove(client)
+
     elif msg.request == management.HDTP_COMMANDS['info']:
-        song_path = msg.get_data()['file_path']
-        song = user.get_song_by_path(song_path)
-        song.open_data()
-        return_msg = management.Message(msg.request, msg.username, msg.password, song.info)
-        return_msg_data = return_msg.get_data()
-        return_msg_data['msg_size'] = FRAMES_PER_MESSAGE * FRAME_SIZE
-        return_msg_data['frames_per_msg'] = FRAMES_PER_MESSAGE
-        return_msg.set_data(return_msg_data)
-        waiting_messages.append((sock, str(return_msg)))
+        song_info(msg, user, sock, waiting_messages)
+
     elif msg.request == management.HDTP_COMMANDS['stream']:
-        song_path = msg.get_data()['file_path']
-        song = user.get_song_by_path(song_path)
-        open_songs.append((sock, song))
+        stream_song(msg, user, open_songs, sock)
+
     elif msg.request == management.HDTP_COMMANDS['close_song']:
-        song_path = msg.get_data()['file_path']
-        song = find_song_by_path(song_path, [song for sock, song in open_songs])
-        song.close_data()
-        open_songs.remove((sock, song))
+        close_song(msg, sock, open_songs)
+
+
+def stream_song(msg, user, open_songs, sock):
+    """
+
+    :param msg:
+    :param user:
+    :param open_songs:
+    :param sock:
+    :return:
+    """
+    song_path = msg.get_data()['file_path']
+    song = user.get_song_by_path(song_path)
+    open_songs.append((sock, song))
+
+
+def song_info(msg, user, sock, waiting_messages):
+    """
+
+    :param msg:
+    :param user:
+    :param sock:
+    :param waiting_messages:
+    :return:
+    """
+    song_path = msg.get_data()['file_path']
+    song = user.get_song_by_path(song_path)
+    song.open_data()
+    return_msg = management.Message(msg.request, msg.username, msg.password, song.info)
+    return_msg_data = return_msg.get_data()
+    return_msg_data['msg_size'] = FRAMES_PER_MESSAGE * FRAME_SIZE
+    return_msg_data['frames_per_msg'] = FRAMES_PER_MESSAGE
+    return_msg.set_data(return_msg_data)
+    waiting_messages.append((sock, str(return_msg)))
+
+
+def close_song(msg, sock, open_songs):
+    """
+
+    :param msg:
+    :param sock:
+    :param open_songs:
+    :return:
+    """
+    song_path = msg.get_data()['file_path']
+    song = find_song_by_path(song_path, [song for sock, song in open_songs])
+    song.close_data()
+    open_songs.remove((sock, song))
 
 
 def find_song_by_path(song_path, songs_list):

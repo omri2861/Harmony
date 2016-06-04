@@ -4,7 +4,6 @@ import sys
 from PyQt4 import QtGui
 import threading
 import main_window
-from time import sleep
 import pickle
 import re
 from pyaudio import PyAudio
@@ -29,13 +28,13 @@ PASSWORD_LEN = 8, 14
 FRAMES_PER_REQUEST = 1000
 
 
-def clean_buffer(sock):
+def clean_socket_buffer(sock):
     """
-    Cleans the buffer of the sock.
+    Cleans the buffer of the given socket.
     :param sock: The socket that should be cleaned.
     :return: None
     """
-    sock.settimeout(0.01)
+    sock.settimeout(0.1)
     flag = True
     while flag:
         try:
@@ -48,6 +47,7 @@ def clean_buffer(sock):
 def receive_full_message(sock):
     """
     Receive the full message which includes all the data from the given socket.
+    Note: The message must be in HDTP format, otherwise, an error will be raised.
     :param sock: The socket that should be received from.
     :return: A Message object which contains all the data.
     """
@@ -226,7 +226,7 @@ class Stream(object):
 
     def reset(self, file_path, info=None):
         """
-        This method will re- set the object so a the stream will play a new song.
+        This method will reset the object so a the stream will play a new song.
         :param file_path: The new song's file path.
         :param info: The new song's information dictionary.
         :return: None
@@ -289,7 +289,7 @@ class ThreadedClient(object):
 
     def update_time_display(self):
         """
-        Constantly updates the time display of the main window.
+        Constantly updates the time display and slider of the main window.
         Should be threaded.
         :return: None
         """
@@ -299,9 +299,11 @@ class ThreadedClient(object):
             else:
                 self.main_frame.update_time_display(self.stream.current_secs)
 
-    def receive_songs_data(self):
+    def receive_songs_tags(self):
         """
-        Receives the songs data from the server.
+        Receives the songs tags from the server and displays them in the table.
+        In addition, the function will enter the file path to the dictionary, so it could be pulled out using the song
+        title.
         :return: None
         """
         msg = receive_full_message(self.sock)
@@ -311,6 +313,18 @@ class ThreadedClient(object):
             song_title = song_dict['title']
             self.songs_file_paths[song_title] = song_dict['file_path']
             self.main_frame.add_song(song_dict)
+
+    def after_login(self):
+        """
+        If the user has logged in, these are the commands that should be executed.
+        :return: None
+        """
+        self.username = self.login_window.get_username()
+        self.password = self.login_window.get_password()
+        self.login_window.setShown(False)
+        self.main_frame.set_label_text("Hello, "+self.username)
+        self.main_frame.show()
+        self.receive_songs_tags()
 
     def onLogin(self):
         """
@@ -330,12 +344,7 @@ class ThreadedClient(object):
                 pass
 
             if self.signals['logged-in']:
-                self.username = self.login_window.get_username()
-                self.password = self.login_window.get_password()
-                self.login_window.setShown(False)
-                self.main_frame.set_label_text("Hello, "+self.username)
-                self.main_frame.show()
-                self.receive_songs_data()
+                self.after_login()
             elif self.signals['correct-username']:
                 msg = dialog("Incorrect Password", '')
                 msg.exec_()
@@ -406,14 +415,17 @@ class ThreadedClient(object):
         logout_msg = management.Message(management.HDTP_COMMANDS['logout'], self.username, self.password)
         self.sock.send(str(logout_msg))
         self.sock.close()  # When the server receives a logout message, it automatically closes the connection.
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         threading.Thread(target=self.establish_connection).start()
         threading.Thread(target=self.main_frame.clear_table).start()
         if self.stream is not None:
             self.stream.close()
+
         self.signals['correct-username'] = False
         self.signals['correct-password'] = False
         self.signals['logged-in'] = False
+
         self.main_frame.setShown(False)
         self.login_window.show()
 
@@ -428,7 +440,7 @@ class ThreadedClient(object):
 
     def exit_and_logout(self, exit_code):
         """
-        Will kill all the running threads, send exit message, etc...
+        Will send exit message, close all open files, etc...
         This should run after app.exec_(), before the termination of the program.
         :parameter exit_code: The exit code given.
         :returns: exit_code
@@ -460,6 +472,7 @@ class ThreadedClient(object):
         Should be threaded.
         :return: None
         """
+        # Starting the stream and getting the song path:
         self.signals['stream'] = True
         selected_row = self.main_frame.get_selected_row()
         if selected_row is None:
@@ -467,6 +480,8 @@ class ThreadedClient(object):
 
         song_title = str(self.main_frame.get_selected_tag('title'))  # from unicode, because PyQt4 stores in unicode
         server_song_path = self.songs_file_paths[song_title]
+
+        # Requesting info from server:
         msg = management.Message(management.HDTP_COMMANDS['info'], self.username, self.password,
                                  {'file_path': server_song_path})
         self.sock.send(str(msg))
@@ -477,6 +492,8 @@ class ThreadedClient(object):
             self.stream.reset(server_song_path, answer.get_data())
         msg_size = answer.get_data()['msg_size']
         frames_per_msg = answer.get_data()['frames_per_msg']
+
+        # Telling the server to go 'stream-mode' and start sending data only through the socket:
         msg = management.Message(management.HDTP_COMMANDS['stream'], self.username, self.password,
                                  {'file_path': server_song_path})
         self.sock.send(str(msg))
@@ -485,15 +502,16 @@ class ThreadedClient(object):
             self.stream.play_frames(frames_per_msg, data)
             data = self.sock.recv(msg_size)
 
+        # Streaming is done, telling the server to stop sending data:
         msg = management.Message(management.HDTP_COMMANDS['close_song'], self.username, self.password,
                                  {'file_path': server_song_path})
         self.sock.send(str(msg))
-        clean_buffer(self.sock)
         self.signals['stream'] = True
 
     def onStop(self):
         self.signals['stream'] = False
-        clean_buffer(self.sock)
+        clean_socket_buffer(self.sock)
+        self.main_frame.update_time_display(0)
 
     def onPlay(self):
         thread = threading.Thread(target=self.start_stream)
